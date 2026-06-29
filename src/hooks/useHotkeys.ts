@@ -129,6 +129,12 @@ export function useHotkeys(engine: DrawingEngine, handlers: HotkeyHandlers): voi
         case 'Escape':
           engine.deselect();
           break;
+        case ',':
+          engine.prevFrame();
+          break;
+        case '.':
+          engine.nextFrame();
+          break;
       }
     };
 

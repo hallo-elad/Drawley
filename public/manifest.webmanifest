@@ -1,0 +1,19 @@
+{
+  "name": "Drawley — Online Drawing App",
+  "short_name": "Drawley",
+  "description": "A modern online drawing app. Create, edit, export and share digital artwork right in your browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e0f1a",
+  "theme_color": "#6d5efc",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

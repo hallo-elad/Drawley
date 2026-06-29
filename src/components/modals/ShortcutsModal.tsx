@@ -44,6 +44,13 @@ const GROUPS: { title: string; items: [string, string][] }[] = [
     ],
   },
   {
+    title: 'Animation',
+    items: [
+      ['Previous frame', ','],
+      ['Next frame', '.'],
+    ],
+  },
+  {
     title: 'File & View',
     items: [
       ['New', 'Ctrl + N'],

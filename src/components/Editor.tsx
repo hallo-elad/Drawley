@@ -3,6 +3,7 @@ import { TopBar } from './TopBar';
 import { Toolbar } from './Toolbar';
 import { CanvasStage } from './CanvasStage';
 import { RightPanel } from './RightPanel';
+import { Timeline } from './Timeline';
 import { StatusBar } from './StatusBar';
 import { ExportModal } from './modals/ExportModal';
 import { ShareModal } from './modals/ShareModal';
@@ -114,6 +115,8 @@ export function Editor() {
         <CanvasStage />
         <RightPanel />
       </div>
+
+      <Timeline />
 
       <StatusBar />
 

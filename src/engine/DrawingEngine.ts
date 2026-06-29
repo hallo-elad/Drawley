@@ -101,6 +101,11 @@ function defaultState(width: number, height: number): EngineState {
     selection: null,
     floating: false,
     hasClipboard: false,
+    frames: [],
+    activeFrameId: '',
+    playing: false,
+    fps: 12,
+    onionSkin: false,
     canUndo: false,
     canRedo: false,
     title: 'Untitled Drawing',
@@ -156,12 +161,25 @@ export class DrawingEngine {
   /** Internal pixel clipboard. */
   private clipboard: HTMLCanvasElement | null = null;
 
+  // --- Animation frames -----------------------------------------------------
+  /** Per-frame layer pixel buffers (the active frame's map === layerCanvases). */
+  private frameCanvases = new Map<string, Map<string, HTMLCanvasElement>>();
+  /** Per-frame layer metadata + active layer. */
+  private frameMeta = new Map<string, { layers: LayerMeta[]; activeLayerId: string }>();
+  /** Cached frame thumbnails. */
+  private frameThumbs = new Map<string, string>();
+  /** Frame ids in playback order. */
+  private frameOrder: string[] = [];
+  private activeFrameId = '';
+  private playTimer = 0;
+
   constructor(width = 1280, height = 800) {
     this.state = defaultState(width, height);
     const first = this.state.layers[0];
     this.layerCanvases.set(first.id, createCanvas(width, height));
     this.scratch = createCanvas(width, height);
     this.scratchCtx = this.scratch.getContext('2d')!;
+    this.initFrames();
     this.loop = this.loop.bind(this);
     this.rafId = requestAnimationFrame(this.loop);
   }
@@ -233,6 +251,7 @@ export class DrawingEngine {
 
   dispose() {
     cancelAnimationFrame(this.rafId);
+    if (this.playTimer) clearInterval(this.playTimer);
     this.listeners.clear();
   }
 
@@ -291,6 +310,8 @@ export class DrawingEngine {
     ctx.fillStyle = s.background;
     ctx.fillRect(0, 0, s.canvasWidth, s.canvasHeight);
     ctx.restore();
+
+    this.drawOnionSkin(ctx);
 
     // Layers, with the in-progress scratch composited above the active layer.
     for (const layer of s.layers) {
@@ -1487,6 +1508,246 @@ export class DrawingEngine {
   }
 
   // ---------------------------------------------------------------------------
+  // Animation frames
+  // ---------------------------------------------------------------------------
+
+  /** (Re)initialise the frame list with the current document as frame 1. */
+  private initFrames() {
+    if (this.playTimer) {
+      clearInterval(this.playTimer);
+      this.playTimer = 0;
+    }
+    const id = uid('frame-');
+    this.frameCanvases.clear();
+    this.frameMeta.clear();
+    this.frameThumbs.clear();
+    this.frameOrder = [id];
+    this.activeFrameId = id;
+    this.frameCanvases.set(id, this.layerCanvases);
+    this.frameMeta.set(id, {
+      layers: this.state.layers,
+      activeLayerId: this.state.activeLayerId,
+    });
+    this.state = {
+      ...this.state,
+      frames: [{ id, thumb: '' }],
+      activeFrameId: id,
+      playing: false,
+    };
+  }
+
+  /** Composite a frame's visible layers into a full-size canvas. */
+  private compositeFrame(frameId: string): HTMLCanvasElement | null {
+    const canvases = this.frameCanvases.get(frameId);
+    const meta = this.frameMeta.get(frameId);
+    if (!canvases || !meta) return null;
+    const out = createCanvas(this.state.canvasWidth, this.state.canvasHeight);
+    const ctx = out.getContext('2d')!;
+    for (const m of meta.layers) {
+      if (!m.visible) continue;
+      const c = canvases.get(m.id);
+      if (!c) continue;
+      ctx.globalAlpha = m.opacity;
+      ctx.globalCompositeOperation = blendOp(m.blendMode ?? 'normal');
+      ctx.drawImage(c, 0, 0);
+    }
+    return out;
+  }
+
+  private buildFrameThumb(frameId: string): string {
+    const comp = this.compositeFrame(frameId);
+    if (!comp) return '';
+    const w = this.state.canvasWidth, h = this.state.canvasHeight;
+    const scale = Math.min(96 / w, 96 / h, 1);
+    const out = createCanvas(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)));
+    const ctx = out.getContext('2d')!;
+    ctx.fillStyle = this.state.background;
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(comp, 0, 0, out.width, out.height);
+    return out.toDataURL('image/png');
+  }
+
+  private refreshThumb(frameId = this.activeFrameId) {
+    this.frameThumbs.set(frameId, this.buildFrameThumb(frameId));
+  }
+
+  private syncFramesState() {
+    this.setState({
+      frames: this.frameOrder.map((id) => ({ id, thumb: this.frameThumbs.get(id) ?? '' })),
+      activeFrameId: this.activeFrameId,
+    });
+  }
+
+  /** Persist the live layer metadata into the active frame's record. */
+  private stashActiveFrame() {
+    this.frameMeta.set(this.activeFrameId, {
+      layers: this.state.layers,
+      activeLayerId: this.state.activeLayerId,
+    });
+  }
+
+  /** Swap the live document to a different frame (no history/thumb work). */
+  private loadFrameLive(id: string) {
+    this.activeFrameId = id;
+    this.layerCanvases = this.frameCanvases.get(id)!;
+    const m = this.frameMeta.get(id)!;
+    this.setState({ layers: m.layers, activeLayerId: m.activeLayerId, activeFrameId: id });
+  }
+
+  setFrame(id: string) {
+    if (id === this.activeFrameId || !this.frameCanvases.has(id)) return;
+    this.commitFloat();
+    this.selPath = null;
+    this.selDraft = null;
+    this.stashActiveFrame();
+    this.refreshThumb(this.activeFrameId);
+    this.loadFrameLive(id);
+    this.setState({ selection: null, floating: false });
+    this.syncFramesState();
+    this.seedHistory();
+    this.requestRender();
+  }
+
+  /** Insert a new frame after the active one (a copy, or blank). */
+  addFrame(duplicate = true) {
+    this.commitFloat();
+    this.stashActiveFrame();
+    this.refreshThumb(this.activeFrameId);
+    const id = uid('frame-');
+    const newMap = new Map<string, HTMLCanvasElement>();
+    const srcMap = this.frameCanvases.get(this.activeFrameId)!;
+    for (const m of this.state.layers) {
+      const c = createCanvas(this.state.canvasWidth, this.state.canvasHeight);
+      if (duplicate) {
+        const s = srcMap.get(m.id);
+        if (s) c.getContext('2d')!.drawImage(s, 0, 0);
+      }
+      newMap.set(m.id, c);
+    }
+    this.frameCanvases.set(id, newMap);
+    this.frameMeta.set(id, {
+      layers: this.state.layers.map((l) => ({ ...l })),
+      activeLayerId: this.state.activeLayerId,
+    });
+    const idx = this.frameOrder.indexOf(this.activeFrameId);
+    this.frameOrder.splice(idx + 1, 0, id);
+    this.loadFrameLive(id);
+    this.setState({ dirty: true });
+    this.refreshThumb(id);
+    this.syncFramesState();
+    this.seedHistory();
+    this.requestRender();
+  }
+
+  duplicateFrame() {
+    this.addFrame(true);
+  }
+
+  nextFrame() {
+    const i = this.frameOrder.indexOf(this.activeFrameId);
+    const n = this.frameOrder[(i + 1) % this.frameOrder.length];
+    if (n) this.setFrame(n);
+  }
+
+  prevFrame() {
+    const i = this.frameOrder.indexOf(this.activeFrameId);
+    const n = this.frameOrder[(i - 1 + this.frameOrder.length) % this.frameOrder.length];
+    if (n) this.setFrame(n);
+  }
+
+  deleteFrame(id: string) {
+    if (this.frameOrder.length <= 1) return;
+    const idx = this.frameOrder.indexOf(id);
+    if (idx < 0) return;
+    this.frameOrder.splice(idx, 1);
+    this.frameCanvases.delete(id);
+    this.frameMeta.delete(id);
+    this.frameThumbs.delete(id);
+    if (this.activeFrameId === id) {
+      const next = this.frameOrder[Math.min(idx, this.frameOrder.length - 1)];
+      this.loadFrameLive(next);
+      this.seedHistory();
+    }
+    this.setState({ dirty: true });
+    this.syncFramesState();
+    this.requestRender();
+  }
+
+  moveFrame(id: string, dir: -1 | 1) {
+    const idx = this.frameOrder.indexOf(id);
+    const target = idx + dir;
+    if (idx < 0 || target < 0 || target >= this.frameOrder.length) return;
+    [this.frameOrder[idx], this.frameOrder[target]] = [this.frameOrder[target], this.frameOrder[idx]];
+    this.setState({ dirty: true });
+    this.syncFramesState();
+  }
+
+  setFps(fps: number) {
+    const v = Math.max(1, Math.min(30, Math.round(fps)));
+    this.setState({ fps: v });
+    if (this.state.playing) {
+      this.pause();
+      this.play();
+    }
+  }
+
+  toggleOnionSkin() {
+    this.setState({ onionSkin: !this.state.onionSkin });
+    this.requestRender();
+  }
+
+  play() {
+    if (this.frameOrder.length < 2 || this.state.playing) return;
+    this.commitFloat();
+    this.stashActiveFrame();
+    this.setState({ playing: true });
+    this.playTimer = window.setInterval(() => {
+      const idx = this.frameOrder.indexOf(this.activeFrameId);
+      const next = this.frameOrder[(idx + 1) % this.frameOrder.length];
+      this.stashActiveFrame();
+      this.loadFrameLive(next);
+      this.requestRender();
+    }, 1000 / this.state.fps);
+  }
+
+  pause() {
+    if (this.playTimer) {
+      clearInterval(this.playTimer);
+      this.playTimer = 0;
+    }
+    this.setState({ playing: false });
+    this.seedHistory();
+  }
+
+  togglePlay() {
+    if (this.state.playing) this.pause();
+    else this.play();
+  }
+
+  /** Onion-skin ghosts of the adjacent frames, drawn under the live art. */
+  private drawOnionSkin(ctx: CanvasRenderingContext2D) {
+    if (!this.state.onionSkin || this.state.playing || this.frameOrder.length < 2) return;
+    const idx = this.frameOrder.indexOf(this.activeFrameId);
+    const prev = this.frameOrder[idx - 1];
+    const next = this.frameOrder[idx + 1];
+    if (prev) {
+      const c = this.compositeFrame(prev);
+      if (c) {
+        ctx.globalAlpha = 0.32;
+        ctx.drawImage(c, 0, 0);
+      }
+    }
+    if (next) {
+      const c = this.compositeFrame(next);
+      if (c) {
+        ctx.globalAlpha = 0.22;
+        ctx.drawImage(c, 0, 0);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------------------------------------------------------------------------
   // Serialization (save / load / share)
   // ---------------------------------------------------------------------------
 
@@ -1560,6 +1821,7 @@ export class DrawingEngine {
       activeLayerId: metas[0]?.id ?? '',
       dirty: false,
     });
+    this.initFrames();
     this.seedHistory();
     this.fitToScreen();
   }
@@ -1590,6 +1852,7 @@ export class DrawingEngine {
       presets: this.state.presets,
     };
     this.emit();
+    this.initFrames();
     this.seedHistory();
     this.fitToScreen();
   }

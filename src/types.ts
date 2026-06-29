@@ -26,6 +26,13 @@ export interface SelectionInfo {
   h: number;
 }
 
+/** A single animation frame as surfaced to the UI (pixels live in the engine). */
+export interface FrameInfo {
+  id: string;
+  /** PNG data URL preview, refreshed when the frame is edited / switched away. */
+  thumb: string;
+}
+
 /** How shapes (rectangle / ellipse) are painted. */
 export type ShapeMode = 'stroke' | 'fill' | 'both';
 
@@ -135,6 +142,16 @@ export interface EngineState {
   floating: boolean;
   /** Whether the internal clipboard holds pixels available to paste. */
   hasClipboard: boolean;
+
+  /** Animation frames in playback order. */
+  frames: FrameInfo[];
+  activeFrameId: string;
+  /** Whether the animation is currently playing back. */
+  playing: boolean;
+  /** Playback speed in frames per second. */
+  fps: number;
+  /** Whether onion-skinning (ghosts of adjacent frames) is shown. */
+  onionSkin: boolean;
 
   canUndo: boolean;
   canRedo: boolean;
