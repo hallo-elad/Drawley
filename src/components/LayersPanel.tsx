@@ -12,7 +12,27 @@ import {
 } from 'lucide-react';
 import { Slider } from './ui/Slider';
 import { useEngine, useEngineState } from '../hooks/useEngine';
+import type { BlendMode } from '../types';
 import './LayersPanel.css';
+
+const BLEND_MODES: BlendMode[] = [
+  'normal',
+  'multiply',
+  'screen',
+  'overlay',
+  'darken',
+  'lighten',
+  'color-dodge',
+  'color-burn',
+  'hard-light',
+  'soft-light',
+  'difference',
+  'exclusion',
+  'hue',
+  'saturation',
+  'color',
+  'luminosity',
+];
 
 /** Photoshop-style layer stack with visibility, lock, opacity & reordering. */
 export function LayersPanel() {
@@ -34,14 +54,30 @@ export function LayersPanel() {
       </div>
 
       {active && (
-        <Slider
-          label="Layer opacity"
-          min={0}
-          max={100}
-          value={Math.round(active.opacity * 100)}
-          onChange={(v) => engine.updateLayer(active.id, { opacity: v / 100 })}
-          suffix="%"
-        />
+        <>
+          <Slider
+            label="Layer opacity"
+            min={0}
+            max={100}
+            value={Math.round(active.opacity * 100)}
+            onChange={(v) => engine.updateLayer(active.id, { opacity: v / 100 })}
+            suffix="%"
+          />
+          <select
+            className="blend-select"
+            value={active.blendMode ?? 'normal'}
+            onChange={(e) =>
+              engine.updateLayer(active.id, { blendMode: e.target.value as BlendMode })
+            }
+            aria-label="Blend mode"
+          >
+            {BLEND_MODES.map((m) => (
+              <option key={m} value={m}>
+                {m.charAt(0).toUpperCase() + m.slice(1).replace('-', ' ')}
+              </option>
+            ))}
+          </select>
+        </>
       )}
 
       <div className="layer-list">

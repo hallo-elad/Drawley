@@ -6,6 +6,7 @@ import {
   Square,
   Circle,
   PaintBucket,
+  Type,
   Hand,
   Pipette,
   Undo2,
@@ -32,6 +33,7 @@ const TOOLS: ToolDef[] = [
   { id: 'rectangle', icon: <Square size={20} />, label: 'Rectangle', shortcut: 'R' },
   { id: 'ellipse', icon: <Circle size={20} />, label: 'Ellipse', shortcut: 'O' },
   { id: 'fill', icon: <PaintBucket size={20} />, label: 'Fill', shortcut: 'G' },
+  { id: 'text', icon: <Type size={20} />, label: 'Text', shortcut: 'T' },
   { id: 'eyedropper', icon: <Pipette size={20} />, label: 'Eyedropper', shortcut: 'I' },
   { id: 'pan', icon: <Hand size={20} />, label: 'Pan', shortcut: 'H' },
 ];

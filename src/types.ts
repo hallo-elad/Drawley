@@ -9,10 +9,36 @@ export type ToolId =
   | 'rectangle'
   | 'ellipse'
   | 'fill'
+  | 'text'
   | 'pan'
   | 'eyedropper';
 
 export type ColorTheme = 'dark' | 'light';
+
+/** How shapes (rectangle / ellipse) are painted. */
+export type ShapeMode = 'stroke' | 'fill' | 'both';
+
+/**
+ * Layer blend mode. Maps directly to canvas `globalCompositeOperation`
+ * (with 'normal' mapped to 'source-over').
+ */
+export type BlendMode =
+  | 'normal'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'color-dodge'
+  | 'color-burn'
+  | 'hard-light'
+  | 'soft-light'
+  | 'difference'
+  | 'exclusion'
+  | 'hue'
+  | 'saturation'
+  | 'color'
+  | 'luminosity';
 
 /** A point in canvas (world) coordinates. */
 export interface Point {
@@ -30,6 +56,8 @@ export interface LayerMeta {
   /** 0..1 layer opacity used when compositing. */
   opacity: number;
   locked: boolean;
+  /** Compositing blend mode. */
+  blendMode: BlendMode;
 }
 
 /** A reusable brush preset shown in the tool options. */
@@ -67,6 +95,12 @@ export interface EngineState {
   hardness: number;
   pressureEnabled: boolean;
   smoothing: boolean;
+
+  /** How rectangle / ellipse shapes are painted. */
+  shapeMode: ShapeMode;
+  /** Font settings for the text tool. */
+  fontSize: number;
+  fontFamily: string;
 
   layers: LayerMeta[];
   activeLayerId: string;
@@ -116,6 +150,7 @@ export interface SerializedLayer {
   visible: boolean;
   opacity: number;
   locked: boolean;
+  blendMode?: BlendMode;
   /** PNG data URL of the layer pixels. */
   data: string;
 }

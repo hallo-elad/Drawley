@@ -1,4 +1,5 @@
 import type {
+  BlendMode,
   BrushPreset,
   EngineState,
   GridConfig,
@@ -6,8 +7,14 @@ import type {
   Point,
   SavedDrawing,
   SerializedLayer,
+  ShapeMode,
   ToolId,
 } from '../types';
+
+/** Map a layer blend mode to a canvas composite operation. */
+function blendOp(mode: BlendMode): GlobalCompositeOperation {
+  return mode === 'normal' ? 'source-over' : (mode as GlobalCompositeOperation);
+}
 import { floodFill } from './floodFill';
 
 /** Generate a short unique id. */
@@ -64,6 +71,7 @@ function defaultState(width: number, height: number): EngineState {
     visible: true,
     opacity: 1,
     locked: false,
+    blendMode: 'normal',
   };
   return {
     tool: 'brush',
@@ -75,6 +83,9 @@ function defaultState(width: number, height: number): EngineState {
     hardness: 0.9,
     pressureEnabled: true,
     smoothing: true,
+    shapeMode: 'stroke',
+    fontSize: 48,
+    fontFamily: 'Inter, system-ui, sans-serif',
     layers: [baseLayer],
     activeLayerId: baseLayer.id,
     zoom: 1,
@@ -225,9 +236,11 @@ export class DrawingEngine {
       const c = this.layerCanvases.get(layer.id);
       if (!c) continue;
       ctx.globalAlpha = layer.opacity;
+      ctx.globalCompositeOperation = blendOp(layer.blendMode ?? 'normal');
       ctx.drawImage(c, 0, 0);
     }
     ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
     return out;
   }
 
@@ -267,6 +280,7 @@ export class DrawingEngine {
       const c = this.layerCanvases.get(layer.id);
       if (!c) continue;
       ctx.globalAlpha = layer.opacity;
+      ctx.globalCompositeOperation = blendOp(layer.blendMode ?? 'normal');
       ctx.drawImage(c, 0, 0);
       if (this.stroke && layer.id === s.activeLayerId) {
         // Eraser previews are applied directly to the layer, so only paint
@@ -276,6 +290,7 @@ export class DrawingEngine {
       }
     }
     ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
 
     if (s.grid.show) this.drawGrid(ctx);
 
@@ -328,6 +343,12 @@ export class DrawingEngine {
     return { x: (sx - s.panX) / s.zoom, y: (sy - s.panY) / s.zoom };
   }
 
+  /** Convert a world-space point to viewport (CSS px) coordinates. */
+  worldToScreen(wx: number, wy: number): { x: number; y: number } {
+    const s = this.state;
+    return { x: wx * s.zoom + s.panX, y: wy * s.zoom + s.panY };
+  }
+
   private maybeSnap(p: { x: number; y: number }): { x: number; y: number } {
     const g = this.state.grid;
     if (!g.snap) return p;
@@ -371,6 +392,11 @@ export class DrawingEngine {
     }
     if (s.tool === 'fill') {
       this.applyFill(world.x, world.y);
+      return;
+    }
+    if (s.tool === 'text') {
+      // Text placement is driven by an overlay input in CanvasStage; the engine
+      // only commits the result. Ignore the raw pointer here.
       return;
     }
 
@@ -487,6 +513,10 @@ export class DrawingEngine {
     if (tool === 'pencil') {
       // Pencil = hard, aliased-feeling 1px-friendly line.
       ctx.imageSmoothingEnabled = false;
+    } else if (tool === 'brush') {
+      // Soft brushes feather their edge with a blur proportional to hardness.
+      const hardness = this.state.hardness;
+      if (hardness < 1) ctx.filter = `blur(${(1 - hardness) * size * 0.35}px)`;
     }
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
@@ -531,7 +561,12 @@ export class DrawingEngine {
       }
     }
 
+    const mode = s.shapeMode;
+    const doFill = mode === 'fill' || mode === 'both';
+    const doStroke = mode === 'stroke' || mode === 'both';
+
     if (st.tool === 'line') {
+      // A line has no interior; always stroke.
       ctx.beginPath();
       ctx.moveTo(bx, by);
       ctx.lineTo(ex, ey);
@@ -541,7 +576,8 @@ export class DrawingEngine {
       const y = Math.min(by, ey);
       const w = Math.abs(ex - bx);
       const h = Math.abs(ey - by);
-      ctx.strokeRect(x, y, w, h);
+      if (doFill) ctx.fillRect(x, y, w, h);
+      if (doStroke) ctx.strokeRect(x, y, w, h);
     } else if (st.tool === 'ellipse') {
       const cx = (bx + ex) / 2;
       const cy = (by + ey) / 2;
@@ -549,7 +585,8 @@ export class DrawingEngine {
       const ry = Math.abs(ey - by) / 2;
       ctx.beginPath();
       ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-      ctx.stroke();
+      if (doFill) ctx.fill();
+      if (doStroke) ctx.stroke();
     }
     ctx.restore();
   }
@@ -577,6 +614,45 @@ export class DrawingEngine {
     this.setColor(hex);
     // Auto-revert to the previous paint tool for a smooth workflow.
     this.setTool(this.state.previousTool === 'eyedropper' ? 'brush' : this.state.previousTool);
+  }
+
+  /** Sample the composited colour at a world point without switching tools. */
+  sampleColorAt(sx: number, sy: number) {
+    const w = this.screenToWorld(sx, sy);
+    const comp = this.composite(true);
+    const ctx = comp.getContext('2d')!;
+    const x = Math.floor(w.x);
+    const y = Math.floor(w.y);
+    if (x < 0 || y < 0 || x >= comp.width || y >= comp.height) return;
+    const px = ctx.getImageData(x, y, 1, 1).data;
+    const hex =
+      '#' +
+      [px[0], px[1], px[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+    this.setColor(hex);
+  }
+
+  /** Rasterise text onto the active layer at the given world point. */
+  commitText(worldX: number, worldY: number, text: string) {
+    const value = text.trim();
+    if (!value) return;
+    const s = this.state;
+    const layer = s.layers.find((l) => l.id === s.activeLayerId);
+    if (layer?.locked) return;
+    const ctx = this.getCtx(s.activeLayerId);
+    ctx.save();
+    ctx.globalAlpha = s.opacity;
+    ctx.fillStyle = s.color;
+    ctx.textBaseline = 'top';
+    ctx.font = `${s.fontSize}px ${s.fontFamily}`;
+    // Support multi-line input.
+    const lineHeight = s.fontSize * 1.2;
+    value.split('\n').forEach((line, i) => {
+      ctx.fillText(line, worldX, worldY + i * lineHeight);
+    });
+    ctx.restore();
+    this.commitHistory();
+    this.setState({ dirty: true });
+    this.requestRender();
   }
 
   // ---------------------------------------------------------------------------
@@ -706,6 +782,23 @@ export class DrawingEngine {
     this.setState({ smoothing });
   }
 
+  setHardness(hardness: number) {
+    this.setState({ hardness: Math.max(0, Math.min(1, hardness)) });
+    this.requestRender();
+  }
+
+  setShapeMode(shapeMode: ShapeMode) {
+    this.setState({ shapeMode });
+  }
+
+  setFontSize(fontSize: number) {
+    this.setState({ fontSize: Math.max(4, Math.min(400, fontSize)) });
+  }
+
+  setFontFamily(fontFamily: string) {
+    this.setState({ fontFamily });
+  }
+
   applyPreset(preset: BrushPreset) {
     this.setState({
       tool: preset.tool,
@@ -741,6 +834,7 @@ export class DrawingEngine {
       visible: true,
       opacity: 1,
       locked: false,
+      blendMode: 'normal',
     };
     this.layerCanvases.set(id, createCanvas(this.state.canvasWidth, this.state.canvasHeight));
     const idx = this.state.layers.findIndex((l) => l.id === this.state.activeLayerId);
@@ -902,6 +996,7 @@ export class DrawingEngine {
       visible: meta.visible,
       opacity: meta.opacity,
       locked: meta.locked,
+      blendMode: meta.blendMode ?? 'normal',
       data: this.layerCanvases.get(meta.id)!.toDataURL('image/png'),
     }));
     return {
@@ -942,6 +1037,7 @@ export class DrawingEngine {
               visible: l.visible,
               opacity: l.opacity,
               locked: l.locked,
+              blendMode: l.blendMode ?? 'normal',
             });
           }),
       ),

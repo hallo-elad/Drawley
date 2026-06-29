@@ -52,6 +52,42 @@
   color: var(--text-dim);
 }
 
+/* Segmented control (shape style) */
+.segmented {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+}
+.segmented-btn {
+  flex: 1;
+  padding: 6px 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+.segmented-btn:hover {
+  color: var(--text);
+}
+.segmented-btn.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+select.text-input {
+  cursor: pointer;
+}
+
+.hint-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
 /* Presets */
 .preset-list {
   display: flex;

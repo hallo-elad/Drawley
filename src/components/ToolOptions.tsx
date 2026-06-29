@@ -1,26 +1,44 @@
 import { Slider } from './ui/Slider';
 import { useEngine, useEngineState } from '../hooks/useEngine';
-import type { BrushPreset } from '../types';
+import type { BrushPreset, ShapeMode } from '../types';
 import './ToolOptions.css';
+
+const SHAPE_MODES: { id: ShapeMode; label: string }[] = [
+  { id: 'stroke', label: 'Stroke' },
+  { id: 'fill', label: 'Fill' },
+  { id: 'both', label: 'Both' },
+];
+
+const FONT_FAMILIES = [
+  { value: 'Inter, system-ui, sans-serif', label: 'Sans' },
+  { value: 'Georgia, "Times New Roman", serif', label: 'Serif' },
+  { value: '"Courier New", monospace', label: 'Mono' },
+  { value: '"Comic Sans MS", "Marker Felt", cursive', label: 'Casual' },
+];
 
 /** Contextual options for the active tool: size, opacity, presets, dynamics. */
 export function ToolOptions() {
   const engine = useEngine();
   const state = useEngineState();
 
+  const isText = state.tool === 'text';
+  const isShape = state.tool === 'rectangle' || state.tool === 'ellipse';
   const showOpacity = state.tool !== 'eraser' && state.tool !== 'pan' && state.tool !== 'eyedropper';
   const showDynamics = state.tool === 'brush' || state.tool === 'pencil';
+  const showSize = !isText;
 
   return (
     <div className="tool-options">
-      <Slider
-        label="Brush Size"
-        min={1}
-        max={200}
-        value={state.brushSize}
-        onChange={(v) => engine.setBrushSize(v)}
-        suffix=" px"
-      />
+      {showSize && (
+        <Slider
+          label="Brush Size"
+          min={1}
+          max={200}
+          value={state.brushSize}
+          onChange={(v) => engine.setBrushSize(v)}
+          suffix=" px"
+        />
+      )}
 
       {showOpacity && (
         <Slider
@@ -29,6 +47,17 @@ export function ToolOptions() {
           max={100}
           value={Math.round(state.opacity * 100)}
           onChange={(v) => engine.setOpacity(v / 100)}
+          suffix="%"
+        />
+      )}
+
+      {state.tool === 'brush' && (
+        <Slider
+          label="Hardness"
+          min={0}
+          max={100}
+          value={Math.round(state.hardness * 100)}
+          onChange={(v) => engine.setHardness(v / 100)}
           suffix="%"
         />
       )}
@@ -46,6 +75,49 @@ export function ToolOptions() {
             onChange={(v) => engine.setSmoothing(v)}
           />
         </div>
+      )}
+
+      {isShape && (
+        <>
+          <span className="field-label">Shape Style</span>
+          <div className="segmented">
+            {SHAPE_MODES.map((m) => (
+              <button
+                key={m.id}
+                className={`segmented-btn ${state.shapeMode === m.id ? 'active' : ''}`}
+                onClick={() => engine.setShapeMode(m.id)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {isText && (
+        <>
+          <Slider
+            label="Font Size"
+            min={8}
+            max={200}
+            value={state.fontSize}
+            onChange={(v) => engine.setFontSize(v)}
+            suffix=" px"
+          />
+          <span className="field-label">Font</span>
+          <select
+            className="text-input"
+            value={state.fontFamily}
+            onChange={(e) => engine.setFontFamily(e.target.value)}
+          >
+            {FONT_FAMILIES.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+          <p className="hint-text">Click on the canvas to place text. Enter commits, Esc cancels.</p>
+        </>
       )}
 
       <div className="divider" />

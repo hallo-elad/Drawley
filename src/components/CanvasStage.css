@@ -32,3 +32,22 @@
 .cursor-pick {
   cursor: cell;
 }
+.cursor-text {
+  cursor: text;
+}
+
+/* In-canvas text entry overlay; visually matches the rasterised result. */
+.text-editor {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  min-width: 8px;
+  background: transparent;
+  border: 1px dashed var(--brand);
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+  caret-color: var(--brand);
+  z-index: 5;
+}

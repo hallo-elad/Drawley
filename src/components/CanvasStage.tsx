@@ -1,6 +1,13 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useEngine, useEngineState } from '../hooks/useEngine';
 import './CanvasStage.css';
+
+/** An in-progress text placement: world position + current value. */
+interface TextEdit {
+  wx: number;
+  wy: number;
+  value: string;
+}
 
 /**
  * The interactive drawing surface. Owns the visible <canvas>, forwards pointer
@@ -18,6 +25,14 @@ export function CanvasStage() {
   const gesture = useRef<{ dist: number; cx: number; cy: number } | null>(null);
   const spaceHeld = useRef(false);
   const panning = useRef<{ x: number; y: number } | null>(null);
+  const [textEdit, setTextEdit] = useState<TextEdit | null>(null);
+  const textRef = useRef<HTMLTextAreaElement>(null);
+
+  // Commit any pending text, then clear the editor.
+  const commitText = () => {
+    if (textEdit) engine.commitText(textEdit.wx, textEdit.wy, textEdit.value);
+    setTextEdit(null);
+  };
 
   // Attach the canvas to the engine and keep the viewport in sync with size.
   useEffect(() => {
@@ -64,6 +79,11 @@ export function CanvasStage() {
     };
   }, []);
 
+  // Focus the text editor as soon as it opens.
+  useEffect(() => {
+    if (textEdit) textRef.current?.focus();
+  }, [textEdit !== null]);
+
   const localPoint = (e: PointerEvent | React.PointerEvent) => {
     const rect = canvasRef.current!.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -72,9 +92,27 @@ export function CanvasStage() {
   const isPanInput = (e: React.PointerEvent) =>
     state.tool === 'pan' || spaceHeld.current || e.button === 1;
 
+  const isPaintTool = (t: string) =>
+    t === 'brush' || t === 'pencil' || t === 'line' || t === 'rectangle' || t === 'ellipse';
+
   const onPointerDown = (e: React.PointerEvent) => {
-    (e.target as Element).setPointerCapture(e.pointerId);
     const p = localPoint(e);
+
+    // Alt-click samples the colour under the cursor without switching tools.
+    if (e.altKey && !isPanInput(e) && isPaintTool(state.tool)) {
+      engine.sampleColorAt(p.x, p.y);
+      return;
+    }
+
+    // Text tool: commit any open editor, then open a new one at the click.
+    if (state.tool === 'text' && !isPanInput(e)) {
+      if (textEdit) commitText();
+      const w = engine.screenToWorld(p.x, p.y);
+      setTextEdit({ wx: w.x, wy: w.y, value: '' });
+      return;
+    }
+
+    (e.target as Element).setPointerCapture(e.pointerId);
     pointers.current.set(e.pointerId, p);
 
     // Two-finger touch → start pinch/pan gesture, cancelling any stroke.
@@ -183,9 +221,11 @@ export function CanvasStage() {
   const cursorClass =
     state.tool === 'pan'
       ? 'cursor-pan'
-      : state.tool === 'eyedropper' || state.tool === 'fill'
-        ? 'cursor-pick'
-        : 'cursor-cross';
+      : state.tool === 'text'
+        ? 'cursor-text'
+        : state.tool === 'eyedropper' || state.tool === 'fill'
+          ? 'cursor-pick'
+          : 'cursor-cross';
 
   return (
     <div ref={wrapRef} className={`canvas-stage ${cursorClass}`}>
@@ -198,6 +238,35 @@ export function CanvasStage() {
         onPointerCancel={endPointer}
         onPointerLeave={onPointerLeave}
       />
+      {textEdit && (
+        <textarea
+          ref={textRef}
+          className="text-editor"
+          value={textEdit.value}
+          spellCheck={false}
+          style={(() => {
+            const s = engine.worldToScreen(textEdit.wx, textEdit.wy);
+            return {
+              left: s.x,
+              top: s.y,
+              color: state.color,
+              font: `${state.fontSize * state.zoom}px ${state.fontFamily}`,
+              lineHeight: 1.2,
+            };
+          })()}
+          onChange={(e) => setTextEdit({ ...textEdit, value: e.target.value })}
+          onBlur={commitText}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              commitText();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              setTextEdit(null);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
