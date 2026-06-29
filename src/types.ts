@@ -10,10 +10,21 @@ export type ToolId =
   | 'ellipse'
   | 'fill'
   | 'text'
+  | 'select'
+  | 'lasso'
+  | 'move'
   | 'pan'
   | 'eyedropper';
 
 export type ColorTheme = 'dark' | 'light';
+
+/** Axis-aligned bounding box of the active selection, in world coordinates. */
+export interface SelectionInfo {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 /** How shapes (rectangle / ellipse) are painted. */
 export type ShapeMode = 'stroke' | 'fill' | 'both';
@@ -117,6 +128,13 @@ export interface EngineState {
   recentColors: string[];
   swatches: string[];
   presets: BrushPreset[];
+
+  /** Bounding box of the current selection, or null when nothing is selected. */
+  selection: SelectionInfo | null;
+  /** Whether a floating selection (cut/pasted pixels) is being moved. */
+  floating: boolean;
+  /** Whether the internal clipboard holds pixels available to paste. */
+  hasClipboard: boolean;
 
   canUndo: boolean;
   canRedo: boolean;

@@ -14,6 +14,9 @@ const GROUPS: { title: string; items: [string, string][] }[] = [
       ['Ellipse', 'O'],
       ['Fill bucket', 'G'],
       ['Text', 'T'],
+      ['Select (marquee)', 'M'],
+      ['Lasso', 'Q'],
+      ['Move', 'V'],
       ['Eyedropper', 'I'],
       ['Quick colour pick', 'Alt + click'],
       ['Pan', 'H / Space'],
@@ -24,9 +27,20 @@ const GROUPS: { title: string; items: [string, string][] }[] = [
     items: [
       ['Undo', 'Ctrl + Z'],
       ['Redo', 'Ctrl + Y / Ctrl + Shift + Z'],
-      ['Clear layer', 'Delete'],
+      ['Delete selection / layer', 'Delete'],
       ['Decrease size', '['],
       ['Increase size', ']'],
+    ],
+  },
+  {
+    title: 'Selection',
+    items: [
+      ['Select all', 'Ctrl + A'],
+      ['Deselect', 'Ctrl + D / Esc'],
+      ['Copy', 'Ctrl + C'],
+      ['Cut', 'Ctrl + X'],
+      ['Paste', 'Ctrl + V'],
+      ['Duplicate', 'Ctrl + J'],
     ],
   },
   {

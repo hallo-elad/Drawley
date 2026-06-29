@@ -6,6 +6,7 @@ import type {
   LayerMeta,
   Point,
   SavedDrawing,
+  SelectionInfo,
   SerializedLayer,
   ShapeMode,
   ToolId,
@@ -97,6 +98,9 @@ function defaultState(width: number, height: number): EngineState {
     recentColors: [],
     swatches: DEFAULT_SWATCHES,
     presets: DEFAULT_PRESETS,
+    selection: null,
+    floating: false,
+    hasClipboard: false,
     canUndo: false,
     canRedo: false,
     title: 'Untitled Drawing',
@@ -139,6 +143,18 @@ export class DrawingEngine {
 
   /** Cursor position in world space, for the brush ring preview. */
   cursorWorld: Point | null = null;
+
+  // --- Selection / floating / clipboard -------------------------------------
+  /** Committed selection outline as a world-space polygon (null = no selection). */
+  private selPath: { x: number; y: number }[] | null = null;
+  /** In-progress selection being dragged out by the select/lasso tools. */
+  private selDraft: { kind: 'select' | 'lasso'; pts: { x: number; y: number }[] } | null = null;
+  /** Floating pixels lifted from the active layer (for move / paste). */
+  private float: { canvas: HTMLCanvasElement; x: number; y: number } | null = null;
+  /** Drag anchor while moving a floating selection. */
+  private moveAnchor: { px: number; py: number; ox: number; oy: number } | null = null;
+  /** Internal pixel clipboard. */
+  private clipboard: HTMLCanvasElement | null = null;
 
   constructor(width = 1280, height = 800) {
     this.state = defaultState(width, height);
@@ -206,6 +222,8 @@ export class DrawingEngine {
   }
 
   private loop() {
+    // Keep redrawing while a selection exists so the marching ants animate.
+    if (this.selPath || this.selDraft || this.float) this.needsRender = true;
     if (this.needsRender) {
       this.render();
       this.needsRender = false;
@@ -288,6 +306,11 @@ export class DrawingEngine {
         ctx.globalAlpha = layer.opacity * (this.stroke.tool === 'eraser' ? 1 : s.opacity);
         if (this.stroke.tool !== 'eraser') ctx.drawImage(this.scratch, 0, 0);
       }
+      // Floating selection rides above its source (active) layer.
+      if (this.float && layer.id === s.activeLayerId) {
+        ctx.globalAlpha = layer.opacity;
+        ctx.drawImage(this.float.canvas, this.float.x, this.float.y);
+      }
     }
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
@@ -298,6 +321,8 @@ export class DrawingEngine {
     ctx.lineWidth = 1 / s.zoom;
     ctx.strokeStyle = 'rgba(128,128,128,0.5)';
     ctx.strokeRect(0, 0, s.canvasWidth, s.canvasHeight);
+
+    this.drawSelectionOverlay(ctx);
 
     // Brush cursor ring (hidden while actively drawing / panning).
     if (this.cursorWorld && !this.stroke && this.isPaintTool(s.tool)) {
@@ -399,6 +424,16 @@ export class DrawingEngine {
       // only commits the result. Ignore the raw pointer here.
       return;
     }
+    if (s.tool === 'select' || s.tool === 'lasso') {
+      const u = this.screenToWorld(sx, sy);
+      this.beginSelDraft(s.tool === 'select' ? 'select' : 'lasso', u.x, u.y);
+      return;
+    }
+    if (s.tool === 'move') {
+      const u = this.screenToWorld(sx, sy);
+      this.beginMove(u.x, u.y);
+      return;
+    }
 
     const layer = s.layers.find((l) => l.id === s.activeLayerId);
     if (this.isPaintTool(s.tool) || s.tool === 'line' || s.tool === 'rectangle' || s.tool === 'ellipse') {
@@ -417,6 +452,16 @@ export class DrawingEngine {
 
   pointerMove(sx: number, sy: number, pressure: number, shift: boolean) {
     this.setCursor(sx, sy);
+    if (this.selDraft) {
+      const u = this.screenToWorld(sx, sy);
+      this.updateSelDraft(u.x, u.y);
+      return;
+    }
+    if (this.moveAnchor) {
+      const u = this.screenToWorld(sx, sy);
+      this.updateMove(u.x, u.y);
+      return;
+    }
     if (!this.stroke) return;
     const world = this.maybeSnap(this.screenToWorld(sx, sy));
     const p: Point = { x: world.x, y: world.y, pressure };
@@ -443,6 +488,14 @@ export class DrawingEngine {
   }
 
   pointerUp() {
+    if (this.selDraft) {
+      this.endSelDraft();
+      return;
+    }
+    if (this.moveAnchor) {
+      this.moveAnchor = null;
+      return;
+    }
     if (!this.stroke) return;
     const t = this.stroke.tool;
 
@@ -453,17 +506,21 @@ export class DrawingEngine {
       } else {
         // Flatten the scratch stroke onto the active layer at stroke opacity.
         const ctx = this.getCtx(this.state.activeLayerId);
+        ctx.save();
+        this.clipToSelection(ctx);
         ctx.globalAlpha = this.state.opacity;
         ctx.globalCompositeOperation = 'source-over';
         ctx.drawImage(this.scratch, 0, 0);
-        ctx.globalAlpha = 1;
+        ctx.restore();
         this.commitHistory();
       }
     } else if (t === 'line' || t === 'rectangle' || t === 'ellipse') {
       const ctx = this.getCtx(this.state.activeLayerId);
+      ctx.save();
+      this.clipToSelection(ctx);
       ctx.globalAlpha = this.state.opacity;
       ctx.drawImage(this.scratch, 0, 0);
-      ctx.globalAlpha = 1;
+      ctx.restore();
       this.commitHistory();
     }
 
@@ -490,6 +547,7 @@ export class DrawingEngine {
       // Erase directly on the active layer.
       const ctx = this.getCtx(s.activeLayerId);
       ctx.save();
+      this.clipToSelection(ctx);
       ctx.globalCompositeOperation = 'destination-out';
       this.strokePath(ctx, a, b, tool);
       ctx.restore();
@@ -596,7 +654,20 @@ export class DrawingEngine {
     const layer = s.layers.find((l) => l.id === s.activeLayerId);
     if (layer?.locked) return;
     const ctx = this.getCtx(s.activeLayerId);
-    floodFill(ctx, Math.floor(x), Math.floor(y), s.color, s.opacity);
+    if (this.selPath) {
+      // Flood a working copy, then composite the result back clipped to the
+      // selection so the fill cannot bleed past the marquee.
+      const tmp = createCanvas(s.canvasWidth, s.canvasHeight);
+      const tctx = tmp.getContext('2d')!;
+      tctx.drawImage(this.layerCanvases.get(s.activeLayerId)!, 0, 0);
+      floodFill(tctx, Math.floor(x), Math.floor(y), s.color, s.opacity);
+      ctx.save();
+      this.clipToSelection(ctx);
+      ctx.drawImage(tmp, 0, 0);
+      ctx.restore();
+    } else {
+      floodFill(ctx, Math.floor(x), Math.floor(y), s.color, s.opacity);
+    }
     this.commitHistory();
     this.setState({ dirty: true });
     this.requestRender();
@@ -653,6 +724,422 @@ export class DrawingEngine {
     this.commitHistory();
     this.setState({ dirty: true });
     this.requestRender();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Selection, floating pixels, clipboard & transforms
+  // ---------------------------------------------------------------------------
+
+  private buildPolyPath(ctx: CanvasRenderingContext2D, pts: { x: number; y: number }[]) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+  }
+
+  private bboxOf(pts: { x: number; y: number }[]): SelectionInfo {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+  }
+
+  /** Push the current selection/clipboard status into React state. */
+  private syncSelectionState() {
+    let sel: SelectionInfo | null = null;
+    if (this.float) {
+      sel = { x: this.float.x, y: this.float.y, w: this.float.canvas.width, h: this.float.canvas.height };
+    } else if (this.selPath) {
+      const b = this.bboxOf(this.selPath);
+      sel = { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h) };
+    }
+    this.setState({ selection: sel, floating: !!this.float, hasClipboard: !!this.clipboard });
+  }
+
+  /** Animated marching-ants outline for the selection / floating bounds. */
+  private drawSelectionOverlay(ctx: CanvasRenderingContext2D) {
+    const s = this.state;
+    let pts = this.selDraft?.pts ?? this.selPath;
+    if (this.float) {
+      const f = this.float;
+      pts = [
+        { x: f.x, y: f.y },
+        { x: f.x + f.canvas.width, y: f.y },
+        { x: f.x + f.canvas.width, y: f.y + f.canvas.height },
+        { x: f.x, y: f.y + f.canvas.height },
+      ];
+    }
+    if (!pts || pts.length < 2) return;
+    const dash = 5 / s.zoom;
+    const offset = (Date.now() / 60) % (dash * 2);
+    ctx.save();
+    ctx.lineWidth = 1 / s.zoom;
+    this.buildPolyPath(ctx, pts);
+    ctx.setLineDash([dash, dash]);
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.lineDashOffset = -offset;
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.lineDashOffset = -offset + dash;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** Clip the given layer context to the committed selection (no-op if none). */
+  private clipToSelection(ctx: CanvasRenderingContext2D) {
+    if (!this.selPath) return;
+    this.buildPolyPath(ctx, this.selPath);
+    ctx.clip();
+  }
+
+  hasSelection(): boolean {
+    return !!this.selPath || !!this.float;
+  }
+
+  // --- Selection drafting (driven by the select / lasso tools) --------------
+
+  private beginSelDraft(kind: 'select' | 'lasso', wx: number, wy: number) {
+    this.commitFloat();
+    this.selDraft = { kind, pts: [{ x: wx, y: wy }] };
+    this.requestRender();
+  }
+
+  private updateSelDraft(wx: number, wy: number) {
+    if (!this.selDraft) return;
+    if (this.selDraft.kind === 'select') {
+      const a = this.selDraft.pts[0];
+      this.selDraft.pts = [a, { x: wx, y: a.y }, { x: wx, y: wy }, { x: a.x, y: wy }];
+    } else {
+      this.selDraft.pts.push({ x: wx, y: wy });
+    }
+    this.requestRender();
+  }
+
+  private endSelDraft() {
+    const d = this.selDraft;
+    this.selDraft = null;
+    if (!d) return;
+    const b = this.bboxOf(d.pts);
+    // A tiny drag is treated as a click-to-deselect.
+    this.selPath = b.w < 2 || b.h < 2 ? null : d.pts;
+    this.syncSelectionState();
+    this.requestRender();
+  }
+
+  // --- Floating pixels ------------------------------------------------------
+
+  /** Lift the selected region from the active layer into a floating buffer. */
+  private floatFromSelection() {
+    if (!this.selPath) return;
+    const layer = this.state.layers.find((l) => l.id === this.state.activeLayerId);
+    if (layer?.locked) return;
+    const b = this.bboxOf(this.selPath);
+    const x = Math.floor(b.x), y = Math.floor(b.y);
+    const w = Math.ceil(b.w), h = Math.ceil(b.h);
+    if (w <= 0 || h <= 0) return;
+    const src = this.layerCanvases.get(this.state.activeLayerId)!;
+    const buf = createCanvas(w, h);
+    const bctx = buf.getContext('2d')!;
+    bctx.save();
+    bctx.translate(-x, -y);
+    this.buildPolyPath(bctx, this.selPath);
+    bctx.clip();
+    bctx.drawImage(src, 0, 0);
+    bctx.restore();
+    // Erase the lifted region from the source layer.
+    const lctx = this.getCtx(this.state.activeLayerId);
+    lctx.save();
+    lctx.globalCompositeOperation = 'destination-out';
+    this.buildPolyPath(lctx, this.selPath);
+    lctx.fill();
+    lctx.restore();
+    this.float = { canvas: buf, x, y };
+    this.selPath = null;
+    this.syncSelectionState();
+  }
+
+  /** Lift the entire active layer (move tool with no active selection). */
+  private floatWholeLayer() {
+    const layer = this.state.layers.find((l) => l.id === this.state.activeLayerId);
+    if (layer?.locked) return;
+    const src = this.layerCanvases.get(this.state.activeLayerId)!;
+    const buf = createCanvas(src.width, src.height);
+    buf.getContext('2d')!.drawImage(src, 0, 0);
+    this.getCtx(this.state.activeLayerId).clearRect(0, 0, src.width, src.height);
+    this.float = { canvas: buf, x: 0, y: 0 };
+    this.syncSelectionState();
+  }
+
+  /** Stamp the floating buffer back down onto the active layer. */
+  commitFloat() {
+    if (!this.float) return;
+    const f = this.float;
+    this.float = null;
+    this.moveAnchor = null;
+    const layer = this.state.layers.find((l) => l.id === this.state.activeLayerId);
+    if (!layer?.locked) {
+      this.getCtx(this.state.activeLayerId).drawImage(f.canvas, f.x, f.y);
+    }
+    this.commitHistory();
+    this.setState({ dirty: true });
+    this.syncSelectionState();
+    this.requestRender();
+  }
+
+  private beginMove(wx: number, wy: number) {
+    if (!this.float) {
+      if (this.selPath) this.floatFromSelection();
+      else this.floatWholeLayer();
+    }
+    if (this.float) {
+      this.moveAnchor = { px: wx, py: wy, ox: this.float.x, oy: this.float.y };
+    }
+  }
+
+  private updateMove(wx: number, wy: number) {
+    if (!this.moveAnchor || !this.float) return;
+    this.float.x = Math.round(this.moveAnchor.ox + (wx - this.moveAnchor.px));
+    this.float.y = Math.round(this.moveAnchor.oy + (wy - this.moveAnchor.py));
+    this.syncSelectionState();
+    this.requestRender();
+  }
+
+  // --- Selection commands (public) ------------------------------------------
+
+  selectAll() {
+    this.commitFloat();
+    const w = this.state.canvasWidth, h = this.state.canvasHeight;
+    this.selPath = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+    this.syncSelectionState();
+    this.requestRender();
+  }
+
+  deselect() {
+    this.commitFloat();
+    this.selPath = null;
+    this.selDraft = null;
+    this.syncSelectionState();
+    this.requestRender();
+  }
+
+  /** Extract the selected pixels (floating or from the active layer). */
+  private extractSelectionCanvas(): HTMLCanvasElement | null {
+    if (this.float) {
+      const c = createCanvas(this.float.canvas.width, this.float.canvas.height);
+      c.getContext('2d')!.drawImage(this.float.canvas, 0, 0);
+      return c;
+    }
+    if (!this.selPath) return null;
+    const b = this.bboxOf(this.selPath);
+    const x = Math.floor(b.x), y = Math.floor(b.y);
+    const w = Math.ceil(b.w), h = Math.ceil(b.h);
+    if (w <= 0 || h <= 0) return null;
+    const src = this.layerCanvases.get(this.state.activeLayerId)!;
+    const buf = createCanvas(w, h);
+    const bctx = buf.getContext('2d')!;
+    bctx.save();
+    bctx.translate(-x, -y);
+    this.buildPolyPath(bctx, this.selPath);
+    bctx.clip();
+    bctx.drawImage(src, 0, 0);
+    bctx.restore();
+    return buf;
+  }
+
+  copySelection() {
+    const buf = this.extractSelectionCanvas();
+    if (!buf) return;
+    this.clipboard = buf;
+    this.setState({ hasClipboard: true });
+  }
+
+  cutSelection() {
+    this.copySelection();
+    this.deleteSelection();
+  }
+
+  /** Drop the clipboard pixels in as a new floating selection (centred). */
+  paste() {
+    if (!this.clipboard) return;
+    this.commitFloat();
+    const c = createCanvas(this.clipboard.width, this.clipboard.height);
+    c.getContext('2d')!.drawImage(this.clipboard, 0, 0);
+    const x = Math.round((this.state.canvasWidth - c.width) / 2);
+    const y = Math.round((this.state.canvasHeight - c.height) / 2);
+    this.float = { canvas: c, x, y };
+    this.selPath = null;
+    this.setState({ tool: 'move', previousTool: this.state.tool });
+    this.syncSelectionState();
+    this.requestRender();
+  }
+
+  duplicateSelection() {
+    const buf = this.extractSelectionCanvas();
+    if (!buf) return;
+    const sel = this.state.selection;
+    this.commitFloat();
+    const c = createCanvas(buf.width, buf.height);
+    c.getContext('2d')!.drawImage(buf, 0, 0);
+    this.float = { canvas: c, x: (sel?.x ?? 0) + 12, y: (sel?.y ?? 0) + 12 };
+    this.selPath = null;
+    this.setState({ tool: 'move', previousTool: this.state.tool });
+    this.syncSelectionState();
+    this.requestRender();
+  }
+
+  /** Delete the floating pixels, the selected region, or clear the layer. */
+  deleteSelection() {
+    if (this.float) {
+      this.float = null;
+      this.moveAnchor = null;
+      this.commitHistory();
+      this.setState({ dirty: true });
+      this.syncSelectionState();
+      this.requestRender();
+      return;
+    }
+    if (!this.selPath) {
+      this.clearLayer();
+      return;
+    }
+    const layer = this.state.layers.find((l) => l.id === this.state.activeLayerId);
+    if (layer?.locked) return;
+    const ctx = this.getCtx(this.state.activeLayerId);
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    this.buildPolyPath(ctx, this.selPath);
+    ctx.fill();
+    ctx.restore();
+    this.commitHistory();
+    this.setState({ dirty: true });
+    this.requestRender();
+  }
+
+  // --- Flip & rotate --------------------------------------------------------
+
+  private flipBuffer(c: HTMLCanvasElement, axis: 'h' | 'v'): HTMLCanvasElement {
+    const out = createCanvas(c.width, c.height);
+    const ctx = out.getContext('2d')!;
+    ctx.translate(axis === 'h' ? c.width : 0, axis === 'v' ? c.height : 0);
+    ctx.scale(axis === 'h' ? -1 : 1, axis === 'v' ? -1 : 1);
+    ctx.drawImage(c, 0, 0);
+    return out;
+  }
+
+  private rotateBuffer(c: HTMLCanvasElement, dir: -1 | 1): HTMLCanvasElement {
+    const out = createCanvas(c.height, c.width);
+    const ctx = out.getContext('2d')!;
+    if (dir > 0) {
+      ctx.translate(c.height, 0);
+      ctx.rotate(Math.PI / 2);
+    } else {
+      ctx.translate(0, c.width);
+      ctx.rotate(-Math.PI / 2);
+    }
+    ctx.drawImage(c, 0, 0);
+    return out;
+  }
+
+  /** Flip the floating/selected pixels, or the whole document if none. */
+  flip(axis: 'h' | 'v') {
+    if (this.float) {
+      this.float.canvas = this.flipBuffer(this.float.canvas, axis);
+      this.requestRender();
+      return;
+    }
+    if (this.selPath) {
+      this.floatFromSelection();
+      const f = this.float as { canvas: HTMLCanvasElement; x: number; y: number } | null;
+      if (f) f.canvas = this.flipBuffer(f.canvas, axis);
+      this.requestRender();
+      return;
+    }
+    for (const [, c] of this.layerCanvases) {
+      const out = this.flipBuffer(c, axis);
+      const ctx = c.getContext('2d')!;
+      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.drawImage(out, 0, 0);
+    }
+    this.commitHistory();
+    this.setState({ dirty: true });
+    this.requestRender();
+  }
+
+  /** Rotate the floating/selected pixels 90°, or the whole document if none. */
+  rotate(dir: -1 | 1) {
+    if (!this.float && !this.selPath) {
+      this.rotateDocument(dir);
+      return;
+    }
+    if (!this.float && this.selPath) this.floatFromSelection();
+    if (this.float) {
+      const old = this.float.canvas;
+      const cx = this.float.x + old.width / 2;
+      const cy = this.float.y + old.height / 2;
+      const nc = this.rotateBuffer(old, dir);
+      this.float.canvas = nc;
+      this.float.x = Math.round(cx - nc.width / 2);
+      this.float.y = Math.round(cy - nc.height / 2);
+      this.syncSelectionState();
+      this.requestRender();
+    }
+  }
+
+  /** Rotate the entire document 90°, swapping its dimensions. */
+  rotateDocument(dir: -1 | 1) {
+    this.commitFloat();
+    const w = this.state.canvasWidth, h = this.state.canvasHeight;
+    for (const [id, c] of this.layerCanvases) {
+      this.layerCanvases.set(id, this.rotateBuffer(c, dir));
+    }
+    this.scratch = createCanvas(h, w);
+    this.scratchCtx = this.scratch.getContext('2d')!;
+    this.selPath = null;
+    this.setState({ canvasWidth: h, canvasHeight: w }, true);
+    this.commitHistory();
+    this.fitToScreen();
+    this.syncSelectionState();
+  }
+
+  // --- Image import ---------------------------------------------------------
+
+  /** Add an image as a new layer, scaled to fit and centred. */
+  addImageLayer(img: HTMLImageElement | HTMLCanvasElement, name = 'Image') {
+    this.commitFloat();
+    const id = uid('layer-');
+    const { canvasWidth: cw, canvasHeight: ch } = this.state;
+    const c = createCanvas(cw, ch);
+    const ctx = c.getContext('2d')!;
+    const iw = (img as HTMLImageElement).naturalWidth || img.width;
+    const ih = (img as HTMLImageElement).naturalHeight || img.height;
+    const scale = Math.min(1, cw / iw, ch / ih);
+    const dw = iw * scale, dh = ih * scale;
+    ctx.drawImage(img, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+    this.layerCanvases.set(id, c);
+    const meta: LayerMeta = { id, name, visible: true, opacity: 1, locked: false, blendMode: 'normal' };
+    const idx = this.state.layers.findIndex((l) => l.id === this.state.activeLayerId);
+    const layers = [...this.state.layers];
+    layers.splice(idx + 1, 0, meta);
+    this.setState({ layers, activeLayerId: id }, true);
+    this.commitHistory();
+    this.requestRender();
+  }
+
+  /** Load an image from a data URL / object URL and add it as a layer. */
+  addImageFromSource(src: string, name = 'Image'): Promise<void> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        this.addImageLayer(img, name);
+        resolve();
+      };
+      img.onerror = () => resolve();
+      img.src = src;
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -715,12 +1202,19 @@ export class DrawingEngine {
       this.scratch = createCanvas(snap.width, snap.height);
       this.scratchCtx = this.scratch.getContext('2d')!;
     }
+    // A restored snapshot invalidates any live selection / floating pixels.
+    this.selPath = null;
+    this.selDraft = null;
+    this.float = null;
+    this.moveAnchor = null;
     this.setState({
       canvasWidth: snap.width,
       canvasHeight: snap.height,
       background: snap.background,
       layers: metas,
       activeLayerId: snap.activeLayerId,
+      selection: null,
+      floating: false,
       canUndo: this.undoStack.length > 1,
       canRedo: this.redoStack.length > 0,
     });
@@ -728,6 +1222,8 @@ export class DrawingEngine {
   }
 
   undo() {
+    // A floating selection is committed first so the move becomes undoable.
+    if (this.float) this.commitFloat();
     if (this.undoStack.length <= 1) return;
     const current = this.undoStack.pop()!;
     this.redoStack.push(current);
@@ -747,6 +1243,8 @@ export class DrawingEngine {
 
   setTool(tool: ToolId) {
     if (tool === this.state.tool) return;
+    // Stamp any floating selection when switching away from the move tool.
+    if (this.float && tool !== 'move') this.commitFloat();
     this.setState({ tool, previousTool: this.state.tool });
     this.requestRender();
   }
@@ -969,6 +1467,9 @@ export class DrawingEngine {
   // ---------------------------------------------------------------------------
 
   resizeDocument(width: number, height: number, anchor: 'topleft' | 'center' = 'topleft') {
+    this.commitFloat();
+    this.selPath = null;
+    this.float = null;
     width = Math.max(16, Math.round(width));
     height = Math.max(16, Math.round(height));
     const offX = anchor === 'center' ? Math.round((width - this.state.canvasWidth) / 2) : 0;
@@ -990,6 +1491,7 @@ export class DrawingEngine {
   // ---------------------------------------------------------------------------
 
   serialize(): SavedDrawing {
+    this.commitFloat();
     const layers: SerializedLayer[] = this.state.layers.map((meta) => ({
       id: meta.id,
       name: meta.name,
@@ -1015,6 +1517,10 @@ export class DrawingEngine {
 
   /** Replace the whole document with a saved/loaded drawing. */
   async load(drawing: SavedDrawing) {
+    this.selPath = null;
+    this.selDraft = null;
+    this.float = null;
+    this.moveAnchor = null;
     const metas: LayerMeta[] = [];
     this.layerCanvases.clear();
     await Promise.all(
@@ -1060,6 +1566,10 @@ export class DrawingEngine {
 
   /** Start a fresh empty document. */
   reset(width = 1280, height = 800, background = '#ffffff') {
+    this.selPath = null;
+    this.selDraft = null;
+    this.float = null;
+    this.moveAnchor = null;
     this.layerCanvases.clear();
     const base = defaultState(width, height);
     base.background = background;
@@ -1093,6 +1603,7 @@ export class DrawingEngine {
    * high-resolution output. `maxWidth` (optional) caps the longest edge.
    */
   exportCanvas(opts: { scale?: number; background?: boolean; maxWidth?: number } = {}): HTMLCanvasElement {
+    this.commitFloat();
     const { scale = 1, background = true, maxWidth } = opts;
     const base = this.composite(background);
     let targetW = base.width * scale;

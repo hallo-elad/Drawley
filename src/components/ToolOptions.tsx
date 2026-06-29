@@ -1,3 +1,16 @@
+import {
+  Copy,
+  Scissors,
+  ClipboardPaste,
+  CopyPlus,
+  Trash2,
+  FlipHorizontal2,
+  FlipVertical2,
+  RotateCw,
+  RotateCcw,
+  XCircle,
+} from 'lucide-react';
+import type { ReactNode } from 'react';
 import { Slider } from './ui/Slider';
 import { useEngine, useEngineState } from '../hooks/useEngine';
 import type { BrushPreset, ShapeMode } from '../types';
@@ -23,9 +36,12 @@ export function ToolOptions() {
 
   const isText = state.tool === 'text';
   const isShape = state.tool === 'rectangle' || state.tool === 'ellipse';
-  const showOpacity = state.tool !== 'eraser' && state.tool !== 'pan' && state.tool !== 'eyedropper';
+  const isSelectTool = state.tool === 'select' || state.tool === 'lasso' || state.tool === 'move';
+  const hasSel = state.selection !== null;
+  const showOpacity =
+    state.tool !== 'eraser' && state.tool !== 'pan' && state.tool !== 'eyedropper' && !isSelectTool;
   const showDynamics = state.tool === 'brush' || state.tool === 'pencil';
-  const showSize = !isText;
+  const showSize = !isText && !isSelectTool;
 
   return (
     <div className="tool-options">
@@ -120,6 +136,50 @@ export function ToolOptions() {
         </>
       )}
 
+      {(isSelectTool || hasSel) && (
+        <>
+          <span className="field-label">
+            {hasSel ? `Selection · ${state.selection!.w}×${state.selection!.h}` : 'Selection'}
+          </span>
+          <div className="action-grid">
+            <ActionBtn label="Copy" disabled={!hasSel} onClick={() => engine.copySelection()}>
+              <Copy size={15} />
+            </ActionBtn>
+            <ActionBtn label="Cut" disabled={!hasSel} onClick={() => engine.cutSelection()}>
+              <Scissors size={15} />
+            </ActionBtn>
+            <ActionBtn label="Paste" disabled={!state.hasClipboard} onClick={() => engine.paste()}>
+              <ClipboardPaste size={15} />
+            </ActionBtn>
+            <ActionBtn label="Duplicate" disabled={!hasSel} onClick={() => engine.duplicateSelection()}>
+              <CopyPlus size={15} />
+            </ActionBtn>
+            <ActionBtn label="Delete" disabled={!hasSel} danger onClick={() => engine.deleteSelection()}>
+              <Trash2 size={15} />
+            </ActionBtn>
+            <ActionBtn label="Deselect" disabled={!hasSel} onClick={() => engine.deselect()}>
+              <XCircle size={15} />
+            </ActionBtn>
+          </div>
+
+          <span className="field-label">Transform {hasSel ? 'selection' : 'canvas'}</span>
+          <div className="action-grid">
+            <ActionBtn label="Flip H" onClick={() => engine.flip('h')}>
+              <FlipHorizontal2 size={15} />
+            </ActionBtn>
+            <ActionBtn label="Flip V" onClick={() => engine.flip('v')}>
+              <FlipVertical2 size={15} />
+            </ActionBtn>
+            <ActionBtn label="Rotate ⟲" onClick={() => engine.rotate(-1)}>
+              <RotateCcw size={15} />
+            </ActionBtn>
+            <ActionBtn label="Rotate ⟳" onClick={() => engine.rotate(1)}>
+              <RotateCw size={15} />
+            </ActionBtn>
+          </div>
+        </>
+      )}
+
       <div className="divider" />
 
       <span className="field-label">Brush Presets</span>
@@ -156,6 +216,32 @@ export function ToolOptions() {
         />
       )}
     </div>
+  );
+}
+
+function ActionBtn({
+  label,
+  children,
+  onClick,
+  disabled,
+  danger,
+}: {
+  label: string;
+  children: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      className={`action-btn ${danger ? 'danger' : ''}`}
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+    >
+      {children}
+      <span>{label}</span>
+    </button>
   );
 }
 

@@ -221,14 +221,48 @@ export function CanvasStage() {
   const cursorClass =
     state.tool === 'pan'
       ? 'cursor-pan'
-      : state.tool === 'text'
-        ? 'cursor-text'
-        : state.tool === 'eyedropper' || state.tool === 'fill'
-          ? 'cursor-pick'
-          : 'cursor-cross';
+      : state.tool === 'move'
+        ? 'cursor-move'
+        : state.tool === 'text'
+          ? 'cursor-text'
+          : state.tool === 'eyedropper' || state.tool === 'fill'
+            ? 'cursor-pick'
+            : 'cursor-cross';
+
+  // Drag-and-drop an image file onto the canvas → new layer.
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = [...e.dataTransfer.files].find((f) => f.type.startsWith('image/'));
+    if (file) {
+      const url = URL.createObjectURL(file);
+      engine.addImageFromSource(url, file.name.replace(/\.[^.]+$/, '')).then(() => {
+        URL.revokeObjectURL(url);
+      });
+    }
+  };
+
+  // Paste an image from the system clipboard → new layer.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith('image/'));
+      if (!item) return;
+      const file = item.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      const url = URL.createObjectURL(file);
+      engine.addImageFromSource(url, 'Pasted image').then(() => URL.revokeObjectURL(url));
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [engine]);
 
   return (
-    <div ref={wrapRef} className={`canvas-stage ${cursorClass}`}>
+    <div
+      ref={wrapRef}
+      className={`canvas-stage ${cursorClass}`}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={onDrop}
+    >
       <canvas
         ref={canvasRef}
         className="draw-canvas"

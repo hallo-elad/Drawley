@@ -18,6 +18,9 @@ const TOOL_KEYS: Record<string, ToolId> = {
   o: 'ellipse',
   g: 'fill',
   t: 'text',
+  m: 'select',
+  q: 'lasso',
+  v: 'move',
   h: 'pan',
   i: 'eyedropper',
 };
@@ -61,6 +64,30 @@ export function useHotkeys(engine: DrawingEngine, handlers: HotkeyHandlers): voi
             e.preventDefault();
             handlers.onExport();
             return;
+          case 'a':
+            e.preventDefault();
+            engine.selectAll();
+            return;
+          case 'c':
+            e.preventDefault();
+            engine.copySelection();
+            return;
+          case 'x':
+            e.preventDefault();
+            engine.cutSelection();
+            return;
+          case 'v':
+            e.preventDefault();
+            engine.paste();
+            return;
+          case 'j':
+            e.preventDefault();
+            engine.duplicateSelection();
+            return;
+          case 'd':
+            e.preventDefault();
+            engine.deselect();
+            return;
           case '=':
           case '+':
             e.preventDefault();
@@ -97,7 +124,10 @@ export function useHotkeys(engine: DrawingEngine, handlers: HotkeyHandlers): voi
           break;
         case 'Delete':
         case 'Backspace':
-          engine.clearLayer();
+          engine.deleteSelection();
+          break;
+        case 'Escape':
+          engine.deselect();
           break;
       }
     };

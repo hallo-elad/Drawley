@@ -11,7 +11,9 @@ import {
   Minimize2,
   Keyboard,
   Crop,
+  ImagePlus,
 } from 'lucide-react';
+import { useRef } from 'react';
 import { useEngine, useEngineState } from '../hooks/useEngine';
 import { useTheme } from '../hooks/useTheme';
 import { Logo } from './Logo';
@@ -35,6 +37,18 @@ export function TopBar(props: TopBarProps) {
   const engine = useEngine();
   const state = useEngineState();
   const { theme, toggleTheme } = useTheme();
+  const imageInput = useRef<HTMLInputElement>(null);
+
+  const onImageFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const url = URL.createObjectURL(file);
+      engine
+        .addImageFromSource(url, file.name.replace(/\.[^.]+$/, ''))
+        .then(() => URL.revokeObjectURL(url));
+    }
+    e.target.value = '';
+  };
 
   return (
     <header className="top-bar">
@@ -64,6 +78,20 @@ export function TopBar(props: TopBarProps) {
         <button className="btn ghost hide-md" onClick={props.onResize} data-tip="Resize canvas">
           <Crop size={17} /> Resize
         </button>
+        <button
+          className="btn ghost hide-md"
+          onClick={() => imageInput.current?.click()}
+          data-tip="Place an image as a new layer"
+        >
+          <ImagePlus size={17} /> Image
+        </button>
+        <input
+          ref={imageInput}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={onImageFile}
+        />
 
         <div className="v-divider hide-sm" />
 

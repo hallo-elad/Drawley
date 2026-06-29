@@ -35,6 +35,9 @@
 .cursor-text {
   cursor: text;
 }
+.cursor-move {
+  cursor: move;
+}
 
 /* In-canvas text entry overlay; visually matches the rasterised result. */
 .text-editor {
