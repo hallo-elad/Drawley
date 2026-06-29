@@ -1,0 +1,29 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+}
+
+.editor-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+@media (max-width: 760px) {
+  .editor-body {
+    flex-direction: column;
+  }
+  /* Tool rail sits at the bottom, panel collapses above the status bar. */
+  .editor-body .toolbar {
+    order: 3;
+  }
+  .editor-body .canvas-stage {
+    order: 1;
+  }
+  .editor-body .right-panel {
+    order: 2;
+    max-height: 42vh;
+  }
+}

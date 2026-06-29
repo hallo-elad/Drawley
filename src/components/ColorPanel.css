@@ -1,0 +1,85 @@
+.color-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.color-main {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.color-swatch-lg {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: transform 0.12s var(--ease);
+}
+.color-swatch-lg:hover {
+  transform: scale(1.04);
+}
+.color-swatch-lg input,
+.bg-swatch input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.color-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.hex-input {
+  text-transform: lowercase;
+  font-variant-numeric: tabular-nums;
+}
+.bg-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.bg-swatch {
+  position: relative;
+  width: 30px;
+  height: 24px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 6px;
+}
+.swatch {
+  aspect-ratio: 1;
+  border-radius: 7px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  transition: transform 0.1s var(--ease);
+}
+.swatch:hover {
+  transform: scale(1.14);
+  box-shadow: var(--shadow-1);
+}
+.swatch-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elev-2);
+  color: var(--text-mute);
+}

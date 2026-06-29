@@ -1,0 +1,103 @@
+.layers-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.layers-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.icon-btn.sm {
+  width: 28px;
+  height: 28px;
+}
+.icon-btn.xs {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+.icon-btn.xs.danger:hover {
+  color: var(--danger);
+}
+
+.layer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.14s var(--ease), border-color 0.14s var(--ease);
+}
+.layer-row:hover {
+  background: var(--surface-hover);
+}
+.layer-row.active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--brand) 35%, transparent);
+}
+
+.layer-vis {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.layer-vis:hover {
+  color: var(--text);
+  background: var(--bg-elev-2);
+}
+
+.layer-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.layer-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--brand);
+  background: var(--bg-elev-2);
+}
+
+.layer-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 0.14s var(--ease);
+}
+.layer-row:hover .layer-actions,
+.layer-row.active .layer-actions {
+  opacity: 1;
+}
+
+/* Always show actions on touch devices where hover is unreliable. */
+@media (hover: none) {
+  .layer-actions {
+    opacity: 1;
+  }
+}
