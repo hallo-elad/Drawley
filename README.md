@@ -1,4 +1,4 @@
-<div align="center">
+
 
 # 🎨 Drawley
 
@@ -23,9 +23,26 @@ in the browser with no backend required.
 - **Custom colour picker**, palette swatches, and an automatic **recent colours** strip
 - **Configurable canvas background** colour
 
+- **Text tool** — click to place editable text, with font family, size, and colour
+- **Soft brushes** via adjustable hardness, and **filled shapes** (stroke / fill / both)
+
+### Selection & Transform
+- **Rectangular marquee** and **lasso** selection with animated marching-ants
+- **Move** floating selections; **copy / cut / paste / duplicate / delete**
+- **Flip** and **rotate** a selection or the whole canvas
+- Paint, fill, and erase are **constrained to the active selection**
+- **Import an image** as a new layer via button, drag-and-drop, or clipboard paste
+
+### Animation
+- Frame-based **timeline** — add / duplicate / delete / reorder frames
+- **Onion-skinning** (ghosts of adjacent frames) and **playback** at adjustable FPS
+
 ### Layers (Bonus)
 - Unlimited layers with **visibility, lock, opacity, rename, duplicate, reorder & delete**
-- Per-layer opacity compositing
+- Per-layer opacity compositing and **blend modes** (multiply, screen, overlay, …)
+
+### Progressive Web App
+- **Installable** and **offline-capable** via a service worker + web manifest
 
 ### Canvas & Navigation
 - **Zoom** (mouse wheel / pinch / buttons / `Ctrl +`,`Ctrl -`) anchored to the cursor
@@ -70,9 +87,12 @@ in the browser with no backend required.
 | Rectangle | `R` | | Export | `Ctrl + E` |
 | Ellipse | `O` | | Zoom in / out | `Ctrl + +` / `Ctrl + -` |
 | Fill | `G` | | Fit to screen | `Ctrl + 0` |
-| Eyedropper | `I` | | Decrease / increase size | `[` / `]` |
-| Pan | `H` / hold `Space` | | Clear active layer | `Delete` |
-| Fullscreen | `F` | | | |
+| Text | `T` | | Decrease / increase size | `[` / `]` |
+| Select / Lasso / Move | `M` / `Q` / `V` | | Delete selection / layer | `Delete` |
+| Eyedropper | `I` | | Select all / Deselect | `Ctrl + A` / `Ctrl + D` |
+| Pan | `H` / hold `Space` | | Copy / Cut / Paste | `Ctrl + C` / `X` / `V` |
+| Previous / Next frame | `,` / `.` | | Duplicate selection | `Ctrl + J` |
+| Fullscreen | `F` | | Quick colour pick | `Alt + click` |
 
 ---
 
@@ -170,6 +190,38 @@ src/
 The **Community Gallery** is seeded with four procedurally-generated sample artworks the
 first time it loads, so the gallery is never empty. Your own published pieces and any
 shared links you save are added alongside them.
+
+---
+
+## 🗄️ Data & Sources
+
+Drawley is **100% client-side** — there is **no external API and no backend server**. All data lives in the browser:
+
+| What | Where | Notes |
+|---|---|---|
+| Saved drawings (gallery) | **IndexedDB** (`drawley` DB, `drawings` store) | Per-layer PNG data + metadata + thumbnail |
+| Autosave | **localStorage** (`drawley:autosave`) | Debounced snapshot of the current work |
+| Shared gallery index | **localStorage** (`drawley:gallery`) | Metadata for locally-kept shared works |
+| Shared drawings | **URL fragment** | Serialized, compressed with `lz-string`, encoded into the share link — opens on any device without a server |
+
+Because storage is local to the browser, drawings are not synced across devices or browsers.
+
+---
+
+## ⚠️ Known Limitations
+
+- **No cloud / cross-device sync** — data is stored per-browser; clearing site data removes drawings.
+- **Animation frames are session-only** — save / export / share act on the *active frame*; frames are not yet persisted to the gallery or share link.
+- **No animated GIF / video export** — the timeline is for authoring and preview only.
+- **No real-time collaboration or user accounts** — intentionally out of scope (would require a backend).
+- Raster (pixel) editor only — no vector shapes or paths.
+
+---
+
+## 📚 Project Documents
+
+- 📄 [`PRD.md`](./PRD.md) — Product Requirements Document (goal, scope & out-of-scope, requirements, data, Definition of Done).
+- ✅ [`tasks.md`](./tasks.md) — the work plan derived from the PRD, tracked as checkable tasks.
 
 ---
 
